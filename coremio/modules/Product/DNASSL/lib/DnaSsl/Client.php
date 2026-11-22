@@ -24,7 +24,7 @@ class Client
     const URL_PROD = 'https://api.domainresellerapi.com/api/v1';
     const URL_OTE  = 'https://ote.domainresellerapi.com/api/v1';
 
-    const VERSION = '1.0.0';
+    const VERSION = '1.1.0';
 
     /** Cloudflare statuses meaning the request never reached the gateway. */
     const UNREACHED = [521, 522, 523, 525, 526];

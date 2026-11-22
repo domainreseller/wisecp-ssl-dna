@@ -8,13 +8,14 @@ Everything for https://wisecp.com/tr/developer/products/new.
 | Category | Provizyon (SSL) |
 | Price | Ücretsiz / Free |
 | License check | None |
-| Version | 1.0.1 |
+| Version | 1.1.0 |
 | Minimum WISECP version | 5.0-beta.3 |
-| Package | `DNASSL-WiseCP5-v1.0.1.zip` from the V1.0.1 release |
+| Package | `DNASSL-WiseCP5-v1.1.0.zip` from the V1.1.0 release |
 | Icon | `icon-512.png` |
 
 > Draft: https://wisecp.com/tr/developer/products/207 — manifest.json (id 207) ships since V1.0.1;
-> the uploaded package is `DNASSL-WiseCP5-v1.0.1.zip`, minimum WISECP 5.0-beta.3.
+> the package uploaded so far is `DNASSL-WiseCP5-v1.0.1.zip` (upload `DNASSL-WiseCP5-v1.1.0.zip` once V1.1.0
+> is released), minimum WISECP 5.0-beta.3.
 
 ## Lede / Kısa açıklama
 

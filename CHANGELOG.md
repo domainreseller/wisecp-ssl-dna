@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.0 — 2026-11-22
 
 Required update. Domain Name API changed its SSL API on 2026-11-20: a certificate is now
 addressed by its certificate ID instead of its domain name. Versions up to 1.0.1 still
