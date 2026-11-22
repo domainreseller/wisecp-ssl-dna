@@ -33,7 +33,7 @@ DNA SSL is the official WISECP 5 module for selling the SSL certificates of your
 - Orders open and configure themselves from the CSR, validation method and approver e-mail on the order form
 - Standard SSL client dashboard: status, e-mail / HTTP file / DNS (CNAME) validation instructions, certificate download, reissue, key size
 - Additional domains (SAN) on the order form up to the package limit
-- Import certificates that already exist in your Domain Name API account, by domain
+- Import certificates that already exist in your Domain Name API account, by domain or certificate ID
 - Test Mode for the Domain Name API test environment; optional revoke on cancellation
 - English and Turkish language files
 

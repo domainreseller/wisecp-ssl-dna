@@ -7,6 +7,11 @@
  * decoded JSON body as an array or throws ApiException; there is no false/error-string
  * channel to forget to check.
  *
+ * A certificate that exists is addressed by its certificateId (a GUID), never by its
+ * domain name: one domain can have several certificates (a renewal next to the one it
+ * renews, cancelled ones). initialize and renew return the id; certificates() and
+ * findCertificateId() look it up.
+ *
  * Kept PHP 7.4 compatible (see ApiException.php).
  */
 
@@ -26,6 +31,10 @@ class Client
 
     /** Extra attempts after an unreached answer. */
     const RETRIES = 2;
+
+    /** Gateway error codes this client reacts to. */
+    const ERR_ALREADY_RENEWED = 'Ssl:10058';
+    const ERR_NOT_RENEWABLE   = 'Ssl:10059';
 
     /** Request and response keys whose values never reach a log line. */
     const SECRET_KEYS = ['privateKey', 'privatekey', 'private_key', 'X-API-KEY', 'apiKey', 'api_key'];
@@ -186,7 +195,10 @@ class Client
     // Certificate lifecycle
     // ------------------------------------------------------------------
 
-    /** POST /ssls/initialize - opens the order. Returns SslOperationResponse. */
+    /**
+     * POST /ssls/initialize - opens the order. Returns SslOperationResponse; keep its
+     * certificateId, every later call needs it.
+     */
     public function initialize(string $packageCode, string $domainName): array
     {
         return $this->operation('POST', '/ssls/initialize', [], [
@@ -196,38 +208,51 @@ class Client
     }
 
     /**
+     * POST /ssls/renew - opens a renewal order linked to the certificate, at the renewal
+     * price. Returns SslOperationResponse whose certificateId is the NEW certificate,
+     * which is then configured like a new order. Repeating the call while that renewal
+     * waits for configuration returns the same renewal and does not charge again.
+     */
+    public function renew(string $certificateId): array
+    {
+        return $this->operation('POST', '/ssls/renew', [], ['certificateId' => self::certificateId($certificateId)]);
+    }
+
+    /**
      * PUT /ssls/configure - submits CSR, DCV choice and contact. Returns SslOperationResponse.
      *
-     * @param array $input domainName, csr, privateKey?, approverMail, authenticationType,
+     * @param array $input certificateId, csr, privateKey?, approverMail, authenticationType,
      *                     webServerType, sanList?, wildcardList?, contact{...}
      */
     public function configure(array $input): array
     {
+        $input['certificateId'] = self::certificateId((string) ($input['certificateId'] ?? ''));
+
         return $this->operation('PUT', '/ssls/configure', [], $input);
     }
 
     /** PUT /ssls/check-status - CertificateStatusDto (status, isConfigured, isIssued, ...). */
-    public function checkStatus(string $domainName): array
+    public function checkStatus(string $certificateId): array
     {
-        return $this->request('PUT', '/ssls/check-status', [], ['domainName' => $domainName]);
+        return $this->request('PUT', '/ssls/check-status', [], ['certificateId' => self::certificateId($certificateId)]);
     }
 
     /** GET /ssls/certificate - CertificateDetailDto. */
-    public function certificate(string $domainName): array
+    public function certificate(string $certificateId): array
     {
-        return $this->request('GET', '/ssls/certificate', ['DomainName' => $domainName]);
+        return $this->request('GET', '/ssls/certificate', ['CertificateId' => self::certificateId($certificateId)]);
     }
 
     /** GET /ssls/certificate-content - PEM bodies (certificate, intermediates, root). */
-    public function certificateContent(string $domainName): array
+    public function certificateContent(string $certificateId): array
     {
-        return $this->request('GET', '/ssls/certificate-content', ['DomainName' => $domainName]);
+        return $this->request('GET', '/ssls/certificate-content', ['CertificateId' => self::certificateId($certificateId)]);
     }
 
     /** POST /ssls/reissue - Returns SslOperationResponse. */
-    public function reissue(string $domainName, string $csr = '', string $approverMail = '', string $privateKey = ''): array
+    public function reissue(string $certificateId, string $csr = '', string $approverMail = '', string $privateKey = ''): array
     {
-        $body = ['domainName' => $domainName];
+        $body = ['certificateId' => self::certificateId($certificateId)];
         if ($csr !== '')          $body['csr']          = trim($csr);
         if ($approverMail !== '') $body['approverMail'] = $approverMail;
         if ($privateKey !== '')   $body['privateKey']   = $privateKey;
@@ -235,7 +260,10 @@ class Client
         return $this->operation('POST', '/ssls/reissue', [], $body);
     }
 
-    /** GET /ssls/approvers - the e-mail addresses allowed for e-mail DCV. */
+    /**
+     * GET /ssls/approvers - the e-mail addresses allowed for e-mail DCV, for a domain and
+     * the package bought (or about to be bought) for it. The gateway needs both.
+     */
     public function approvers(string $domainName, string $packageCode): array
     {
         $result = $this->request('GET', '/ssls/approvers', [
@@ -251,9 +279,167 @@ class Client
     }
 
     /** DELETE /ssls/revoke - Returns SslOperationResponse. */
-    public function revoke(string $domainName): array
+    public function revoke(string $certificateId): array
     {
-        return $this->operation('DELETE', '/ssls/revoke', ['DomainName' => $domainName]);
+        return $this->operation('DELETE', '/ssls/revoke', ['CertificateId' => self::certificateId($certificateId)]);
+    }
+
+    // ------------------------------------------------------------------
+    // Finding a certificate
+    // ------------------------------------------------------------------
+
+    /**
+     * GET /ssls - the reseller's certificates, newest first, all pages.
+     *
+     * @param string $domainName only this domain's ('' for all); the gateway matches a
+     *                           wildcard with and without its "*." prefix
+     * @return array[] CertificateListItemDto rows
+     */
+    public function certificates(string $domainName = ''): array
+    {
+        $items = [];
+        $skip  = 0;
+        $page  = 100;
+
+        // Same guard as products(): a gateway that ignores SkipCount must not loop us.
+        for ($guard = 0; $guard < 50; $guard++) {
+            $query = ['SkipCount' => $skip, 'MaxResultCount' => $page];
+            if ($domainName !== '') $query = ['DomainName' => $domainName] + $query;
+
+            $result = $this->request('GET', '/ssls', $query);
+            $rows   = isset($result['items']) && is_array($result['items']) ? $result['items'] : [];
+            $total  = isset($result['totalCount']) ? (int) $result['totalCount'] : count($rows);
+
+            foreach ($rows as $row) {
+                if (is_array($row)) $items[] = $row;
+            }
+
+            $skip += count($rows);
+            if (!$rows || $skip >= $total) break;
+        }
+
+        return $items;
+    }
+
+    /**
+     * The certificate a domain name stands for: the id of its newest certificate that is
+     * still current (not cancelled, not superseded by a renewal), else its newest one,
+     * '' when the domain has none. For records that only know the domain.
+     */
+    public function findCertificateId(string $domainName): string
+    {
+        $domainName = strtolower(trim($domainName));
+        if ($domainName === '') return '';
+
+        $rows = $this->certificates($domainName);
+
+        // The gateway also returns the wildcard/base twin of the name; an exact match wins.
+        $exact = array_values(array_filter($rows, function ($row) use ($domainName) {
+            return strtolower((string) ($row['domainName'] ?? '')) === $domainName;
+        }));
+        if ($exact) $rows = $exact;
+
+        $fallback = '';
+        foreach ($rows as $row) {
+            $id = (string) ($row['certificateId'] ?? '');
+            if (!self::isCertificateId($id)) continue;
+            if (self::isCurrent($row)) return $id;
+            if ($fallback === '') $fallback = $id;
+        }
+
+        return $fallback;
+    }
+
+    /** The id of the renewal certificate opened for $certificateId, '' when there is none. */
+    public function findRenewalId(string $certificateId, string $domainName = ''): string
+    {
+        $certificateId = strtolower(self::certificateId($certificateId));
+
+        foreach ($this->certificates($domainName) as $row) {
+            $id = (string) ($row['certificateId'] ?? '');
+            if (strtolower((string) ($row['renewedFromCertificateId'] ?? '')) !== $certificateId) continue;
+            if (self::isCertificateId($id) && stripos((string) ($row['status'] ?? ''), 'cancel') === false) return $id;
+        }
+
+        return '';
+    }
+
+    /**
+     * Renews the certificate behind a billing renewal, or opens a new order when there is
+     * nothing left to renew. Returns SslOperationResponse plus 'mode':
+     *
+     *   renewed  - POST /ssls/renew opened a renewal (the normal case)
+     *   adopted  - a renewal already existed (opened from the reseller panel, or by an
+     *              earlier attempt); it is used and nothing is charged again
+     *   new      - the certificate is cancelled or unknown to the gateway, so a new order
+     *              was opened with initialize
+     *
+     * Everything else is thrown: too early to renew (Ssl:10057), insufficient balance,
+     * and a certificate that is still waiting for its first configuration - a second
+     * certificate is never bought while one is live or pending.
+     */
+    public function renewOrReplace(string $certificateId, string $packageCode, string $domainName): array
+    {
+        if (self::isCertificateId($certificateId)) {
+            try {
+                return $this->renew($certificateId) + ['mode' => 'renewed'];
+            } catch (ApiException $e) {
+                if (in_array($e->errorCode(), [self::ERR_ALREADY_RENEWED, self::ERR_NOT_RENEWABLE], true)) {
+                    $renewal = $this->findRenewalId($certificateId, $domainName);
+                    if ($renewal !== '') {
+                        return ['success' => true, 'certificateId' => $renewal, 'mode' => 'adopted'];
+                    }
+                }
+
+                $gone = $e->isNotFound()
+                    || ($e->errorCode() === self::ERR_NOT_RENEWABLE && $this->isCancelled($certificateId));
+                if (!$gone) throw $e;
+            }
+        }
+
+        return $this->initialize($packageCode, $domainName) + ['mode' => 'new'];
+    }
+
+    /** True for a GUID, the only thing the gateway accepts as a certificate id. */
+    public static function isCertificateId(string $id): bool
+    {
+        return (bool) preg_match('/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i', trim($id));
+    }
+
+    /**
+     * The id as sent to the gateway. A domain name here means the caller still works
+     * the way the gateway did before certificates had ids; say so instead of sending a
+     * request that can only be rejected.
+     */
+    private static function certificateId(string $id): string
+    {
+        $id = trim($id);
+        if (!self::isCertificateId($id)) {
+            throw new ApiException(
+                'The certificate ID is missing or not valid. Domain Name API identifies a certificate by its ID, not by its domain name.',
+                0,
+                'InvalidCertificateId'
+            );
+        }
+
+        return $id;
+    }
+
+    /** A list row that is neither cancelled nor superseded by a renewal. */
+    private static function isCurrent(array $row): bool
+    {
+        $status = strtolower((string) ($row['status'] ?? ''));
+
+        return strpos($status, 'cancel') === false && $status !== 'renewed';
+    }
+
+    private function isCancelled(string $certificateId): bool
+    {
+        try {
+            return stripos((string) ($this->certificate($certificateId)['status'] ?? ''), 'cancel') !== false;
+        } catch (ApiException $e) {
+            return $e->isNotFound();
+        }
     }
 
     // ------------------------------------------------------------------

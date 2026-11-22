@@ -6,9 +6,10 @@
  * import and cost-sync cron come from the core; this class maps them onto the Domain
  * Name API SSL gateway (/api/v1/ssls/*).
  *
- * The gateway addresses a certificate by its domain, not by an order id, so the
- * domain the order was opened for is stored with the service and every later call uses
- * it. The certificate id it returns is kept for display and support.
+ * The gateway addresses a certificate by its certificate id (one domain can have
+ * several certificates), so the id returned when the order is opened or renewed is
+ * stored with the service and every later call uses it. The domain is kept for display
+ * and to match services that only know their domain.
  */
     namespace WISECP\Modules\Product;
 
@@ -146,7 +147,7 @@
 
         protected function sslImportIdLabel(): string
         {
-            return $this->lang['import-domain'] ?? 'Certificate Domain';
+            return $this->lang['import-domain'] ?? 'Certificate Domain or ID';
         }
 
         public function controller_save(): array
@@ -234,24 +235,33 @@
         /** Imports a certificate that already exists at Domain Name API as a service. */
         public function controller_import(): array
         {
-            $domain     = Normalizer::domain((string) \Filter::init('POST/order_id', 'hclear'));
+            // A certificate ID, or the domain: the newest current certificate on it.
+            $entered    = trim((string) \Filter::init('POST/order_id', 'hclear'));
+            $id         = Client::isCertificateId($entered) ? strtolower($entered) : '';
+            $domain     = $id === '' ? Normalizer::domain($entered) : '';
             $user_id    = (int) \Filter::init('POST/user_id', 'numbers');
             $product_id = (int) \Filter::init('POST/product_id', 'numbers');
             $cycle      = trim((string) \Filter::init('POST/cycle', 'route'));
 
-            if ($domain === '')
-                return ['status' => 'error', 'message' => $this->lang['import-no-id'] ?? 'Enter the certificate domain.'];
+            if ($id === '' && $domain === '')
+                return ['status' => 'error', 'message' => $this->lang['import-no-id'] ?? 'Enter the certificate domain or ID.'];
             if (!$user_id || !$product_id)
                 return ['status' => 'error', 'message' => $this->lang['import-missing-fields'] ?? 'Client and product are required.'];
-            if ($this->serviceForDomain($domain))
-                return ['status' => 'error', 'message' => $this->lang['import-exists'] ?? 'This certificate has already been imported.'];
 
             try {
                 $this->initApi();
-                $detail = $this->api->certificate($domain);
+                if ($id === '') $id = $this->api->findCertificateId($domain);
+                if ($id === '')
+                    return ['status' => 'error', 'message' => sprintf($this->lang['import-not-found'] ?? 'No certificate for %s was found in your Domain Name API account.', $domain)];
+
+                $detail = $this->api->certificate($id);
             } catch (ApiException $e) {
                 return ['status' => 'error', 'message' => $e->getMessage()];
             }
+
+            $domain = Normalizer::domain((string) ($detail['domainName'] ?? '')) ?: $domain;
+            if ($domain === '' || $this->serviceForDomain($domain))
+                return ['status' => 'error', 'message' => $this->lang['import-exists'] ?? 'This certificate has already been imported.'];
 
             $now        = \DateManager::Now();
             $issued     = $this->toDate((string) ($detail['subscription']['purchasedAt'] ?? ''), $now);
@@ -265,7 +275,7 @@
                 'renewaldate' => $now,
                 'options'     => [
                     'config' => [
-                        'id'         => $domain,
+                        'id'         => $id,
                         'domain'     => $domain,
                         'package'    => (string) ($detail['packageCode'] ?? ''),
                         'configured' => !empty($detail['isConfigured']),
@@ -322,6 +332,37 @@
             return (string) ($this->options['config']['id'] ?? '');
         }
 
+        /**
+         * The gateway id of the service's certificate.
+         *
+         * The gateway addresses a certificate by its id only, since one domain can have
+         * several. A service that still carries the domain where the id belongs (imported
+         * before the gateway had ids, or typed on the service page) is matched once to
+         * the newest current certificate on that domain and the id is stored. Throws a
+         * not-found ApiException when the gateway has no certificate for the domain.
+         */
+        private function remoteId(): string
+        {
+            $id = trim($this->certificateId());
+            if (Client::isCertificateId($id)) return $id;
+
+            $this->initApi();
+            $domain = $this->domain();
+            $id     = $domain !== '' ? $this->api->findCertificateId($domain) : '';
+            if ($id === '') {
+                throw new ApiException(
+                    sprintf($this->lang['err-not-found'] ?? 'No certificate for %s was found in your Domain Name API account.', $domain),
+                    404,
+                    'Ssl:10026'
+                );
+            }
+
+            $this->options['config']['id'] = $id;
+            $this->save_options();
+
+            return $id;
+        }
+
         public function create(): bool|array
         {
             $config = (array) ($this->options['config'] ?? []);
@@ -361,8 +402,13 @@
         }
 
         /**
-         * The gateway has no renew call: a renewal is a new order for the same domain,
-         * configured with the CSR the client gave last time.
+         * Renewal is the gateway's renew call: a new certificate linked to the current
+         * one, at the renewal price, configured with the CSR the client gave last time.
+         *
+         * A certificate that is cancelled or unknown to the gateway cannot be renewed and
+         * gets a new order instead. While the gateway refuses for any other reason
+         * (renewal opens 30 days before the subscription ends, balance, ...) nothing is
+         * bought and its message is reported.
          */
         public function renew(): bool|array
         {
@@ -374,7 +420,16 @@
             if ($csr === '') throw new \Exception($this->lang['err-no-csr'] ?? 'A CSR is required to issue the certificate.');
 
             $this->initApi();
-            $result = $this->call(fn () => $this->api->initialize($this->packageCode(), $domain));
+            $result = $this->call(function () use ($domain) {
+                try {
+                    $current = $this->remoteId();
+                } catch (ApiException $e) {
+                    if (!$e->isNotFound()) throw $e;
+                    $current = '';
+                }
+
+                return $this->api->renewOrReplace($current, $this->packageCode(), $domain);
+            });
             $this->options['config']['id']         = (string) ($result['certificateId'] ?? '') ?: $domain;
             $this->options['config']['configured'] = false;
             $this->save_options();
@@ -392,7 +447,7 @@
 
             $this->initApi();
             try {
-                $this->api->revoke($this->domain());
+                $this->api->revoke($this->remoteId());
             } catch (ApiException $e) {
                 // Cancellation must not stall on a package that cannot be revoked.
                 if ($e->isUnsupported()) {
@@ -411,7 +466,11 @@
 
             $domain = $this->domain();
             $this->initApi();
-            $detail = $this->call(fn () => $this->api->certificate($domain));
+            [$id, $detail] = $this->call(function () {
+                $id = $this->remoteId();
+
+                return [$id, $this->api->certificate($id)];
+            });
 
             $status  = $this->mapStatus(Normalizer::status($detail));
             $conf    = (array) ($detail['configuration'] ?? []);
@@ -423,7 +482,7 @@
             $crt = $ca = '';
             if ($status === 'active') {
                 try {
-                    [$crt, $ca] = Normalizer::pem($this->api->certificateContent($domain));
+                    [$crt, $ca] = Normalizer::pem($this->api->certificateContent($id));
                 } catch (ApiException $e) {
                     // Status is still worth showing without the PEM.
                 }
@@ -488,7 +547,7 @@
 
             try {
                 $this->initApi();
-                $this->api->reissue($domain, $csr, $approver);
+                $this->api->reissue($this->remoteId(), $csr, $approver);
             } catch (ApiException $e) {
                 $this->error = $e->getMessage();
                 return false;
@@ -507,7 +566,7 @@
         {
             try {
                 $this->initApi();
-                $this->api->checkStatus($this->domain());
+                $this->api->checkStatus($this->remoteId());
             } catch (ApiException $e) {
                 $this->error = $e->getMessage();
                 return false;
@@ -570,7 +629,7 @@
             );
 
             $input = [
-                'domainName'         => $domain,
+                'certificateId'      => $this->remoteId(),
                 'csr'                => $csr,
                 'approverMail'       => $approver,
                 'authenticationType' => Normalizer::dcvToApi($method),

@@ -38,8 +38,8 @@ Built on WISECP 5's own SSL framework, so it looks and works like the bundled SS
 - The standard SSL client dashboard: status, validation instructions (e-mail, HTTP file or
   DNS CNAME), certificate download, reissue
 - Additional domains (SAN) on the order form, up to the package limit
-- Renewal as a new order
-- Import of a certificate that already exists in your Domain Name API account, by domain
+- Renewal as a renewal order linked to the current certificate, at the renewal price
+- Import of a certificate that already exists in your Domain Name API account, by domain or certificate ID
 - Optional revoke on cancellation
 
 ## 📋 Requirements
@@ -60,9 +60,14 @@ Built on WISECP 5's own SSL framework, so it looks and works like the bundled SS
 
 ## 🧩 Things worth knowing
 
-- **A certificate is identified by its domain.** Domain Name API addresses certificates by
-  domain, not by order number, so the module stores the domain the order was opened for;
-  the admin can see and correct it on the service page.
+- **A certificate is identified by its certificate ID.** A domain can have more than one
+  certificate at Domain Name API (a renewal next to the one it renews), so the module
+  stores the ID of the service's certificate. A service that only knows its domain is
+  matched to the newest current certificate on it; the admin can see and correct the
+  domain on the service page.
+- **Renewal opens 30 days before the subscription ends.** A renewal attempted earlier than
+  that is refused by Domain Name API and nothing is charged. Unused days of the old term
+  are not carried over.
 - **Additional domains are taken with the order.** The API cannot add a SAN to an existing
   certificate, so the dashboard's add-SAN action explains that instead.
 - **Validation e-mails cannot be re-sent on request,** and the method cannot be changed on

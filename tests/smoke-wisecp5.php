@@ -15,11 +15,29 @@ $ok = 0; $fail = 0;
 function check($label, $cond, $extra = '') { global $ok, $fail; if ($cond) { $ok++; echo "  ok   $label\n"; } else { $fail++; echo "  FAIL $label $extra\n"; } }
 function attempt($label, callable $fn) { try { return $fn(); } catch (\Throwable $e) { echo "  ..   $label threw " . get_class($e) . ': ' . $e->getMessage() . "\n"; return $e; } }
 
-$state = ['init' => 0, 'configured' => null, 'issued' => false, 'revoked' => 0, 'reissue' => null];
-$fake = function ($method, $url, $headers, $body) use (&$state) {
+$state = ['init' => 0, 'renewed' => 0, 'current' => '', 'configured' => null, 'issued' => false, 'revoked' => 0, 'reissue' => null,
+          'listed' => 0, 'wrongId' => []];
+// Certificate ids are GUIDs; "current" is the one the service must be using.
+$guid = fn ($n) => sprintf('c0ffee00-0000-4000-8000-%012d', $n);
+$fake = function ($method, $url, $headers, $body) use (&$state, $guid) {
     $path = parse_url($url, PHP_URL_PATH);
+    parse_str((string) parse_url($url, PHP_URL_QUERY), $q);
     $b = $body ? json_decode($body, true) : [];
     $j = fn ($d, $s = 200) => [$s, json_encode($d)];
+
+    // The gateway no longer finds a certificate by domain name: every call for an
+    // existing certificate must carry the current certificate id and no domain.
+    $byId = ['PUT /api/v1/ssls/configure' => 'b', 'PUT /api/v1/ssls/check-status' => 'b', 'POST /api/v1/ssls/reissue' => 'b',
+             'GET /api/v1/ssls/certificate' => 'q', 'GET /api/v1/ssls/certificate-content' => 'q', 'DELETE /api/v1/ssls/revoke' => 'q'];
+    if (isset($byId[$method . ' ' . $path])) {
+        $sentId   = $byId[$method . ' ' . $path] === 'b' ? ($b['certificateId'] ?? null) : ($q['CertificateId'] ?? null);
+        $sentName = $byId[$method . ' ' . $path] === 'b' ? isset($b['domainName']) : isset($q['DomainName']);
+        if ($sentId !== $state['current'] || $sentName) {
+            $state['wrongId'][] = $method . ' ' . $path;
+            return [403, json_encode(['error' => ['code' => 'Ssl:10026', 'message' => 'Certificate not found']])];
+        }
+    }
+
     switch ($method . ' ' . $path) {
         case 'GET /api/v1/products/ssls':
             return $j(['totalCount' => 1, 'items' => [[
@@ -28,7 +46,20 @@ $fake = function ($method, $url, $headers, $body) use (&$state) {
             ]]]);
         case 'POST /api/v1/ssls/initialize':
             $state['init']++;
-            return $j(['success' => true, 'certificateId' => 'cert-' . $state['init']]);
+            $state['current'] = $guid($state['init']);
+            return $j(['success' => true, 'certificateId' => $state['current']]);
+        case 'POST /api/v1/ssls/renew':
+            if (!empty($state['renewTooEarly'])) return [403, json_encode(['error' => ['code' => 'Ssl:10057', 'message' => 'Renewal opens on 2027-10-01.']])];
+            if (($b['certificateId'] ?? '') !== $state['current']) return [403, json_encode(['error' => ['code' => 'Ssl:10026', 'message' => 'Certificate not found']])];
+            $state['renewed']++;
+            $state['current'] = $guid(100 + $state['renewed']);
+            return $j(['success' => true, 'certificateId' => $state['current'], 'status' => 'WaitingForInstall']);
+        case 'GET /api/v1/ssls':
+            $state['listed']++;
+            return $j(['totalCount' => 2, 'items' => [
+                ['certificateId' => $state['current'], 'domainName' => $q['DomainName'] ?? '', 'status' => 'Active'],
+                ['certificateId' => $guid(999), 'domainName' => $q['DomainName'] ?? '', 'status' => 'Cancelled'],
+            ]]);
         case 'PUT /api/v1/ssls/configure':
             $state['configured'] = $b;
             return $j(['success' => true]);
@@ -71,9 +102,10 @@ $m->requirement_params = ['csr' => "-----BEGIN CERTIFICATE REQUEST-----\nX\n----
 echo "== create\n";
 check('create', attempt('create', fn () => $m->create()) === true);
 $c = $state['configured'];
-check('initialize once', $state['init'] === 1 && $m->certificateId() === 'cert-1');
+check('initialize once', $state['init'] === 1 && $m->certificateId() === $guid(1));
 check('domain normalised and stored', ($m->options['config']['domain'] ?? '') === 'secure.example.com');
 check('configure payload', $c && $c['authenticationType'] === 'HTTP' && $c['approverMail'] === 'webmaster@secure.example.com' && $c['webServerType'] === 'Apache', json_encode($c));
+check('configure addresses the certificate by id', $c['certificateId'] === $guid(1) && !isset($c['domainName']), json_encode($c));
 check('contact', $c['contact']['fax'] === '5321234567' && $c['contact']['country'] === 'TR' && $c['contact']['phoneCountryCode'] === '90' && $c['contact']['phone'] === '5321234567');
 check('create idempotent', $m->create() === true && $state['init'] === 1);
 
@@ -102,10 +134,26 @@ check('product options from catalogue', (function () { return $this->sslProductO
 $rows = $cat->fetchCatalog();
 check('catalogue row', count($rows) === 1 && $rows[0]['code'] === 'SECTIGO-PSSL' && $rows[0]['min_cost'] === 7.0 && count($rows[0]['prices']) === 2, json_encode($rows));
 
+echo "== services that only know their domain\n";
+// Imported with an earlier version, or linked by typing the domain on the service page:
+// matched once to the current certificate on that domain, then remembered.
+$m->options['config']['id'] = 'secure.example.com';
+$s = attempt('fetchRemoteStatus', fn () => $m->fetchRemoteStatus());
+check('looked up by domain', is_array($s) && $s['status'] === 'active' && $state['listed'] === 1 && $m->certificateId() === $guid(1));
+$m->fetchRemoteStatus();
+check('the id found is remembered', $state['listed'] === 1);
+
 echo "== renew / cancel\n";
-check('renew opens new order', $m->renew() === true && $state['init'] === 2 && $m->certificateId() === 'cert-2');
+$state['renewTooEarly'] = true;
+$early = attempt('renew', fn () => $m->renew());
+check('renew too early buys nothing and says why', $early instanceof \Exception && $early->getMessage() === 'Renewal opens on 2027-10-01.' && $state['init'] === 1 && $m->certificateId() === $guid(1));
+$state['renewTooEarly'] = false;
+check('renew uses the renew call, not a second purchase', $m->renew() === true && $state['renewed'] === 1 && $state['init'] === 1 && $m->certificateId() === $guid(101));
+check('renewal configured by its own id', $state['configured']['certificateId'] === $guid(101));
 check('cancel revokes when enabled', $m->cancel() === true && $state['revoked'] === 1);
 $m->config['settings']['revoke_on_cancel'] = 0;
 check('cancel no-op when disabled', $m->cancel() === true && $state['revoked'] === 1);
+
+check('every call for an existing certificate carried its id', $state['wrongId'] === [], json_encode($state['wrongId']));
 
 echo "\n$ok passed, $fail failed\n";

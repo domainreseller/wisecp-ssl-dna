@@ -43,13 +43,14 @@ return [
     'catalog-imported'  => '%d product(s) created, %d already existed.',
     'catalog-synced'    => '%d product(s) checked, %d price(s) updated.',
 
-    'import-desc'           => 'Bring a certificate that already exists in your Domain Name API account under WISECP management. Enter the domain it was issued for.',
-    'import-domain'         => 'Certificate Domain',
+    'import-desc'           => 'Bring a certificate that already exists in your Domain Name API account under WISECP management. Enter the domain it was issued for, or its certificate ID when the domain has more than one certificate.',
+    'import-domain'         => 'Certificate Domain or ID',
     'import-user-id'        => 'Client',
     'import-product'        => 'Product',
     'import-cycle'          => 'Billing Cycle',
     'import-no-product'     => 'No products found using this module.',
-    'import-no-id'          => 'Enter the certificate domain.',
+    'import-no-id'          => 'Enter the certificate domain or ID.',
+    'import-not-found'      => 'No certificate for %s was found in your Domain Name API account.',
     'import-missing-fields' => 'Client and product are required.',
     'import-exists'         => 'This certificate has already been imported.',
     'import-failed'         => 'The certificate could not be imported.',
@@ -68,7 +69,7 @@ return [
     'cfg-product-desc' => 'The certificate package this product sells.',
 
     'config-domain'      => 'Certificate Domain',
-    'config-domain-desc' => 'Domain Name API identifies the certificate by this domain.',
+    'config-domain-desc' => 'The domain the certificate is issued for. A service without a linked certificate is matched to the newest current certificate on this domain.',
 
     'req-domain'                  => 'Domain',
     'req-csr'                     => 'CSR Code',
@@ -81,6 +82,7 @@ return [
     'err-no-product' => 'No certificate is configured for this product.',
     'err-no-domain'  => 'A domain is required to issue the certificate.',
     'err-no-csr'     => 'A CSR is required to issue the certificate.',
+    'err-not-found'  => 'No certificate for %s was found in your Domain Name API account.',
 
     'not-supported-resend' => 'Domain Name API does not resend validation e-mails on request. Reissue the certificate to start validation again.',
     'not-supported-method' => 'The validation method cannot be changed on an existing order. Reissue the certificate instead.',

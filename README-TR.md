@@ -36,8 +36,8 @@ WISECP 5'in kendi SSL altyapısı üzerine kuruludur; hazır gelen SSL modüller
 - Standart SSL müşteri paneli: durum, doğrulama talimatları (e-posta, HTTP dosyası veya DNS
   CNAME), sertifika indirme, yeniden düzenleme
 - Sipariş formunda paket limitine kadar ek alan adı (SAN)
-- Yenileme yeni sipariş olarak açılır
-- Domain Name API hesabınızda zaten bulunan bir sertifikayı alan adıyla içe aktarma
+- Yenileme, mevcut sertifikaya bağlı yenileme siparişi olarak yenileme fiyatıyla açılır
+- Domain Name API hesabınızda zaten bulunan bir sertifikayı alan adı veya sertifika ID'siyle içe aktarma
 - İptalde isteğe bağlı sertifika iptali (revoke)
 
 ## 📋 Gereksinimler
@@ -58,9 +58,14 @@ WISECP 5'in kendi SSL altyapısı üzerine kuruludur; hazır gelen SSL modüller
 
 ## 🧩 Bilinmesi gerekenler
 
-- **Sertifika alan adıyla tanınır.** Domain Name API sertifikaları sipariş numarasıyla değil
-  alan adıyla tanır; modül siparişin açıldığı alan adını saklar, yönetici bunu hizmet
-  sayfasında görüp düzeltebilir.
+- **Sertifika, sertifika ID'siyle tanınır.** Domain Name API'de bir alan adının birden fazla
+  sertifikası olabilir (yenileme ile yenilenen sertifika yan yana durur); modül hizmetin
+  sertifika ID'sini saklar. Yalnızca alan adını bilen bir hizmet, o alan adındaki en yeni
+  geçerli sertifikayla eşleştirilir; yönetici alan adını hizmet sayfasında görüp
+  düzeltebilir.
+- **Yenileme, abonelik bitimine 30 gün kala açılır.** Daha erken denenen bir yenilemeyi
+  Domain Name API reddeder ve ücret kesilmez. Eski dönemin kullanılmayan günleri yeni
+  döneme aktarılmaz.
 - **Ek alan adları siparişle birlikte alınır.** API mevcut bir sertifikaya SAN ekleyemez;
   panelin SAN ekleme işlemi bunu açıklayan bir mesaj gösterir.
 - **Doğrulama e-postası istek üzerine yeniden gönderilemez,** açık bir siparişte yöntem de

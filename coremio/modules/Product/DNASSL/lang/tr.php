@@ -43,13 +43,14 @@ return [
     'catalog-imported'  => '%d ürün oluşturuldu, %d ürün zaten vardı.',
     'catalog-synced'    => '%d ürün kontrol edildi, %d fiyat güncellendi.',
 
-    'import-desc'           => 'Domain Name API hesabınızda zaten bulunan bir sertifikayı WISECP yönetimine alın. Sertifikanın düzenlendiği alan adını girin.',
-    'import-domain'         => 'Sertifika Alan Adı',
+    'import-desc'           => 'Domain Name API hesabınızda zaten bulunan bir sertifikayı WISECP yönetimine alın. Sertifikanın düzenlendiği alan adını, alan adında birden fazla sertifika varsa sertifika ID\'sini girin.',
+    'import-domain'         => 'Sertifika Alan Adı veya ID',
     'import-user-id'        => 'Müşteri',
     'import-product'        => 'Ürün',
     'import-cycle'          => 'Ödeme Dönemi',
     'import-no-product'     => 'Bu modülü kullanan ürün bulunamadı.',
-    'import-no-id'          => 'Sertifika alan adını girin.',
+    'import-no-id'          => 'Sertifika alan adını veya ID\'sini girin.',
+    'import-not-found'      => 'Domain Name API hesabınızda %s için bir sertifika bulunamadı.',
     'import-missing-fields' => 'Müşteri ve ürün seçilmelidir.',
     'import-exists'         => 'Bu sertifika zaten içe aktarılmış.',
     'import-failed'         => 'Sertifika içe aktarılamadı.',
@@ -68,7 +69,7 @@ return [
     'cfg-product-desc' => 'Bu ürünün sattığı sertifika paketi.',
 
     'config-domain'      => 'Sertifika Alan Adı',
-    'config-domain-desc' => 'Domain Name API sertifikayı bu alan adıyla tanır.',
+    'config-domain-desc' => 'Sertifikanın düzenlendiği alan adı. Bağlı sertifikası olmayan hizmet, bu alan adındaki en yeni geçerli sertifikayla eşleştirilir.',
 
     'req-domain'                  => 'Alan Adı',
     'req-csr'                     => 'CSR Kodu',
@@ -81,6 +82,7 @@ return [
     'err-no-product' => 'Bu ürün için bir sertifika paketi seçilmemiş.',
     'err-no-domain'  => 'Sertifika için bir alan adı gereklidir.',
     'err-no-csr'     => 'Sertifika için CSR gereklidir.',
+    'err-not-found'  => 'Domain Name API hesabınızda %s için bir sertifika bulunamadı.',
 
     'not-supported-resend' => 'Domain Name API doğrulama e-postasını istek üzerine yeniden göndermiyor. Doğrulamayı yeniden başlatmak için sertifikayı yeniden düzenleyin (reissue).',
     'not-supported-method' => 'Mevcut bir siparişte doğrulama yöntemi değiştirilemez. Bunun yerine sertifikayı yeniden düzenleyin (reissue).',
