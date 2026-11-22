@@ -26,6 +26,11 @@ $api = new Client('0f2c-reseller', 'SECRET-API-KEY', true);
 $api->setTransport($fake);
 $api->setLogger(function ($a, $req, $resp) use (&$logs) { $logs[] = [$a, $req, $resp]; });
 
+// Certificate ids are GUIDs; the client refuses anything else before sending.
+const ID  = '3fa85f64-5717-4562-b3fc-2c963f66afa6';
+const ID2 = '99999999-5717-4562-b3fc-2c963f66afa6';
+const ID3 = '11111111-5717-4562-b3fc-2c963f66afa6';
+
 echo "== transport\n";
 check('test mode uses OTE', $api->baseUrl() === Client::URL_OTE);
 
@@ -56,34 +61,34 @@ try { $api->initialize('PKG', 'example.com'); check('success=false throws', fals
 catch (ApiException $e) { check('success=false throws', $e->getMessage() === 'Domain already has an active order'); }
 
 $responses = [[400, json_encode(['error' => ['code' => 'Ssl:01', 'message' => 'Validation failed', 'validationErrors' => [['message' => 'Csr is required']]]])]];
-try { $api->configure(['domainName' => 'example.com']); check('ABP error parsed', false); }
+try { $api->configure(['certificateId' => ID]); check('ABP error parsed', false); }
 catch (ApiException $e) { check('ABP error parsed', $e->getMessage() === 'Validation failed Csr is required' && $e->errorCode() === 'Ssl:01' && $e->httpStatus() === 400); }
 
 $responses = [[404, '']];
-try { $api->revoke('gone.com'); check('404 is not-found', false); }
+try { $api->revoke(ID); check('404 is not-found', false); }
 catch (ApiException $e) { check('404 is not-found', $e->isNotFound()); }
 
 $responses = [[403, json_encode(['error' => ['code' => 'Ssl:10026', 'message' => 'Certificate not found']])]];
-try { $api->certificate('gone.com'); check('Ssl:10026 is not-found', false); }
+try { $api->certificate(ID); check('Ssl:10026 is not-found', false); }
 catch (ApiException $e) { check('Ssl:10026 is not-found', $e->isNotFound() && $e->getMessage() === 'Certificate not found'); }
 
 $responses = [[401, '']];
-try { $api->checkStatus('x.com'); check('401 message', false); }
+try { $api->checkStatus(ID); check('401 message', false); }
 catch (ApiException $e) { check('401 message', strpos($e->getMessage(), 'Reseller ID / API Key') !== false); }
 
 $responses = [[200, '<html>maintenance</html>']];
-try { $api->certificate('x.com'); check('non-JSON rejected', false); }
+try { $api->certificate(ID); check('non-JSON rejected', false); }
 catch (ApiException $e) { check('non-JSON rejected', $e->errorCode() === 'InvalidResponse'); }
 
 $sent = [];
 $responses = [[525, '<html>cf</html>'], [525, ''], [200, json_encode(['success' => true, 'certificateId' => 'c1'])]];
 check('525 retried until it goes through', $api->initialize('P', 'x.com')['certificateId'] === 'c1' && count($sent) === 3);
 $responses = [[525, ''], [525, ''], [525, '']];
-try { $api->checkStatus('x.com'); check('525 gives up after 2 retries', false); }
+try { $api->checkStatus(ID); check('525 gives up after 2 retries', false); }
 catch (ApiException $e) { check('525 gives up after 2 retries', $e->httpStatus() === 525 && strpos($e->getMessage(), 'could not be reached') !== false); }
 $sent = [];
 $responses = [[502, ''], [200, '{}']];
-try { $api->checkStatus('x.com'); } catch (ApiException $e) {}
+try { $api->checkStatus(ID); } catch (ApiException $e) {}
 check('502 not retried (may have reached the gateway)', count($sent) === 1);
 
 $responses = [[200, json_encode(['mails' => ['admin@x.com', '', 'webmaster@x.com']])]];
@@ -91,8 +96,113 @@ check('approvers filtered', $api->approvers('x.com', 'PKG') === ['admin@x.com', 
 
 $sent = [];
 $responses = [[200, json_encode(['success' => true])]];
-$api->revoke('a b.com');
-check('revoke is DELETE with query', $sent[0]['method'] === 'DELETE' && strpos($sent[0]['url'], 'DomainName=a%20b.com') !== false && $sent[0]['body'] === null);
+$api->revoke(' ' . ID . ' ');
+check('revoke is DELETE with query', $sent[0]['method'] === 'DELETE' && substr($sent[0]['url'], -strlen('/ssls/revoke?CertificateId=' . ID)) === '/ssls/revoke?CertificateId=' . ID && $sent[0]['body'] === null);
+
+echo "== certificate id\n";
+$ok200 = function ($d = []) { return [200, json_encode($d)]; };
+$sent = [];
+$responses = [$ok200(['status' => 'Active']), $ok200(), $ok200(), $ok200(['success' => true]), $ok200(['success' => true])];
+$api->checkStatus(ID);
+$api->certificate(ID);
+$api->certificateContent(ID);
+$api->reissue(ID, 'CSR', 'admin@x.com');
+$api->configure(['certificateId' => ID, 'csr' => 'CSR']);
+check('check-status body carries the id', $sent[0]['method'] === 'PUT' && json_decode($sent[0]['body'], true) === ['certificateId' => ID]);
+check('certificate and content query by id', strpos($sent[1]['url'], '/ssls/certificate?CertificateId=' . ID) !== false && strpos($sent[2]['url'], '/ssls/certificate-content?CertificateId=' . ID) !== false);
+check('reissue and configure bodies carry the id', json_decode($sent[3]['body'], true)['certificateId'] === ID && json_decode($sent[4]['body'], true)['certificateId'] === ID);
+check('no call sends a domain name', strpos(json_encode($sent), 'omainName') === false);
+
+// The gateway used to take the domain name here. A caller that still passes one gets a
+// clear error and nothing is sent.
+$sent = [];
+foreach (['checkStatus', 'certificate', 'certificateContent', 'reissue', 'revoke', 'renew'] as $call) {
+    try { $api->$call('example.com'); check("$call refuses a domain name", false); }
+    catch (ApiException $e) { check("$call refuses a domain name", $e->errorCode() === 'InvalidCertificateId' && strpos($e->getMessage(), 'not by its domain name') !== false); }
+}
+try { $api->configure(['domainName' => 'example.com', 'csr' => 'CSR']); check('configure refuses a missing id', false); }
+catch (ApiException $e) { check('configure refuses a missing id', $e->errorCode() === 'InvalidCertificateId'); }
+check('nothing sent without a valid id', $sent === []);
+check('id shape', Client::isCertificateId(strtoupper(ID)) && !Client::isCertificateId('example.com') && !Client::isCertificateId('') && !Client::isCertificateId(ID . '0'));
+
+echo "== list / lookup\n";
+$row = function ($id, $domain, $status, $renewedFrom = null) {
+    return ['certificateId' => $id, 'domainName' => $domain, 'status' => $status, 'renewedFromCertificateId' => $renewedFrom];
+};
+$list = function (array $rows, $total = null) use ($ok200) { return $ok200(['totalCount' => $total === null ? count($rows) : $total, 'items' => $rows]); };
+
+$sent = [];
+$responses = [$list(array_fill(0, 100, $row(ID, 'x.com', 'Active')), 101), $list([$row(ID2, 'x.com', 'Active')], 101)];
+check('certificates paginates', count($api->certificates('x.com')) === 101 && count($sent) === 2
+    && strpos($sent[0]['url'], '/ssls?DomainName=x.com&SkipCount=0') !== false && strpos($sent[1]['url'], 'SkipCount=100') !== false);
+$sent = [];
+$responses = [$list([])];
+check('certificates without a filter', $api->certificates() === [] && strpos($sent[0]['url'], 'DomainName') === false);
+
+// Newest first, as the gateway returns them.
+$responses = [$list([$row(ID3, 'x.com', 'Cancelled'), $row(ID2, 'x.com', 'Active'), $row(ID, 'x.com', 'Renewed')])];
+check('lookup: newest current certificate', $api->findCertificateId('X.com') === ID2);
+$responses = [$list([$row(ID3, 'x.com', 'Cancelled'), $row(ID, 'x.com', 'Renewed')])];
+check('lookup: nothing current falls back to the newest', $api->findCertificateId('x.com') === ID3);
+$responses = [$list([$row(ID2, '*.x.com', 'Active'), $row(ID, 'x.com', 'Active')])];
+check('lookup: exact name beats the wildcard twin', $api->findCertificateId('x.com') === ID);
+$responses = [$list([$row(ID2, '*.x.com', 'Active')])];
+check('lookup: twin used when it is all there is', $api->findCertificateId('x.com') === ID2);
+$responses = [$list([])];
+check('lookup: none', $api->findCertificateId('x.com') === '');
+$sent = [];
+check('lookup: empty name asks nothing', $api->findCertificateId(' ') === '' && $sent === []);
+
+echo "== renew\n";
+$err = function ($code, $message, $status = 403) { return [$status, json_encode(['error' => ['code' => $code, 'message' => $message]])]; };
+
+$sent = [];
+$responses = [$ok200(['success' => true, 'certificateId' => ID2, 'status' => 'WaitingForInstall'])];
+$r = $api->renew(ID);
+check('renew posts the id, returns the new certificate', $sent[0]['method'] === 'POST' && substr($sent[0]['url'], -11) === '/ssls/renew'
+    && json_decode($sent[0]['body'], true) === ['certificateId' => ID] && $r['certificateId'] === ID2);
+
+$sent = [];
+$responses = [$ok200(['success' => true, 'certificateId' => ID2])];
+$r = $api->renewOrReplace(ID, 'PKG', 'x.com');
+check('renewOrReplace: renews', $r['mode'] === 'renewed' && $r['certificateId'] === ID2 && count($sent) === 1);
+
+$sent = [];
+$responses = [$err('Ssl:10058', 'already renewed'), $list([$row(ID2, 'x.com', 'WaitingForInstall', ID), $row(ID, 'x.com', 'Active')])];
+$r = $api->renewOrReplace(ID, 'PKG', 'x.com');
+check('renewOrReplace: adopts an existing renewal, buys nothing', $r['mode'] === 'adopted' && $r['certificateId'] === ID2
+    && count($sent) === 2 && strpos(json_encode($sent), 'initialize') === false);
+
+$sent = [];
+$responses = [$err('Ssl:10058', 'already renewed'), $list([$row(ID2, 'x.com', 'Cancelled', ID)])];
+try { $api->renewOrReplace(ID, 'PKG', 'x.com'); check('renewOrReplace: already renewed but no live renewal is an error', false); }
+catch (ApiException $e) { check('renewOrReplace: already renewed but no live renewal is an error', $e->errorCode() === 'Ssl:10058' && strpos(json_encode($sent), 'initialize') === false); }
+
+$sent = [];
+$responses = [$err('Ssl:10026', 'Certificate not found'), $ok200(['success' => true, 'certificateId' => ID3])];
+$r = $api->renewOrReplace(ID, 'PKG', 'x.com');
+check('renewOrReplace: unknown certificate gets a new order', $r['mode'] === 'new' && $r['certificateId'] === ID3
+    && json_decode($sent[1]['body'], true) === ['packageCode' => 'PKG', 'domainName' => 'x.com']);
+
+$sent = [];
+$responses = [$err('Ssl:10059', 'cannot be renewed'), $list([]), $ok200(['status' => 'Cancelled']), $ok200(['success' => true, 'certificateId' => ID3])];
+$r = $api->renewOrReplace(ID, 'PKG', 'x.com');
+check('renewOrReplace: cancelled certificate gets a new order', $r['mode'] === 'new' && count($sent) === 4 && substr($sent[3]['url'], -16) === '/ssls/initialize');
+
+$sent = [];
+$responses = [$err('Ssl:10059', 'cannot be renewed'), $list([]), $ok200(['status' => 'WaitingForInstall'])];
+try { $api->renewOrReplace(ID, 'PKG', 'x.com'); check('renewOrReplace: a pending certificate is never doubled', false); }
+catch (ApiException $e) { check('renewOrReplace: a pending certificate is never doubled', $e->errorCode() === 'Ssl:10059' && strpos(json_encode($sent), 'initialize') === false); }
+
+$sent = [];
+$responses = [$err('Ssl:10057', 'Renewal opens on 2027-10-01')];
+try { $api->renewOrReplace(ID, 'PKG', 'x.com'); check('renewOrReplace: too early buys nothing', false); }
+catch (ApiException $e) { check('renewOrReplace: too early buys nothing', $e->getMessage() === 'Renewal opens on 2027-10-01' && count($sent) === 1); }
+
+$sent = [];
+$responses = [$ok200(['success' => true, 'certificateId' => ID3])];
+$r = $api->renewOrReplace('x.com', 'PKG', 'x.com');
+check('renewOrReplace: no id known opens a new order', $r['mode'] === 'new' && count($sent) === 1 && substr($sent[0]['url'], -16) === '/ssls/initialize');
 
 try { (new Client('', ''))->products(); check('missing credentials', false); }
 catch (ApiException $e) { check('missing credentials', strpos($e->getMessage(), 'required') !== false); }
