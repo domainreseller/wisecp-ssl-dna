@@ -5,7 +5,7 @@ return [
     'status'             => false,
     'meta'               => [
         'name'         => 'DNA SSL',
-        'version'      => '1.0.1',
+        'version'      => '1.1.0',
         'author'       => 'Domain Name API',
         'logo'         => 'logo.svg',
         'descriptions' => 'Sell Sectigo, DigiCert, GeoTrust, RapidSSL and other SSL certificates from your Domain Name API reseller account, with catalogue import, daily cost sync and automatic issuance.',
